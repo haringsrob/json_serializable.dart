@@ -89,6 +89,14 @@ class GeneratorHelper extends HelperCore with EncodeHelper, DecodeHelper {
           .where((e) => createResult.usedFields.contains(e.key))
           .map((e) => e.value)
           .toSet();
+
+      final createUpdateResult = createUpdate(accessibleFields, unavailableReasons);
+      yield createUpdateResult.output;
+
+      accessibleFieldSet = accessibleFields.entries
+          .where((e) => createUpdateResult.usedFields.contains(e.key))
+          .map((e) => e.value)
+          .toSet();
     }
 
     // Check for duplicate JSON keys due to colliding annotations.

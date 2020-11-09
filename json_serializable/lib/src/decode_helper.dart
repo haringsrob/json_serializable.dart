@@ -22,9 +22,9 @@ class CreateFactoryResult {
 
 abstract class DecodeHelper implements HelperCore {
   CreateFactoryResult createFactory(
-    Map<String, FieldElement> accessibleFields,
-    Map<String, String> unavailableReasons,
-  ) {
+      Map<String, FieldElement> accessibleFields,
+      Map<String, String> unavailableReasons,
+      ) {
     assert(config.createFactory);
     final buffer = StringBuffer();
 
@@ -32,6 +32,111 @@ abstract class DecodeHelper implements HelperCore {
     buffer.write('$targetClassReference '
         '${prefix}FromJson${genericClassArgumentsImpl(true)}'
         '($mapType json');
+
+    if (config.genericArgumentFactories) {
+      for (var arg in element.typeParameters) {
+        final helperName = fromJsonForType(
+          arg.instantiate(nullabilitySuffix: NullabilitySuffix.none),
+        );
+
+        buffer.write(', ${arg.name} Function(Object json) $helperName');
+      }
+      if (element.typeParameters.isNotEmpty) {
+        buffer.write(',');
+      }
+    }
+
+    buffer.write(') {\n');
+
+    String deserializeFun(String paramOrFieldName,
+        {ParameterElement ctorParam}) =>
+        _deserializeForField(accessibleFields[paramOrFieldName],
+            ctorParam: ctorParam);
+
+    final data = _writeConstructorInvocation(
+      element,
+      accessibleFields.keys,
+      accessibleFields.values
+          .where((fe) =>
+      !fe.isFinal ||
+          // Handle the case where `fe` defines a getter in `element`
+          // and there is a setter in a super class
+          // See google/json_serializable.dart#613
+          element.lookUpSetter(fe.name, element.library) != null)
+          .map((fe) => fe.name)
+          .toList(),
+      unavailableReasons,
+      deserializeFun,
+    );
+
+    final checks = _checkKeys(accessibleFields.values
+        .where((fe) => data.usedCtorParamsAndFields.contains(fe.name)));
+
+    if (config.checked) {
+      final classLiteral = escapeDartString(element.name);
+
+      buffer..write('''
+  return \$checkedNew(
+    $classLiteral,
+    json,
+    () {\n''')..write(checks)..write('''
+    final val = ${data.content};''');
+
+      for (final field in data.fieldsToSet) {
+        buffer.writeln();
+        final safeName = safeNameAccess(accessibleFields[field]);
+        buffer
+          ..write('''
+    \$checkedConvert(json, $safeName, (v) => ''')
+          ..write('val.$field = ')
+          ..write(_deserializeForField(accessibleFields[field],
+              checkedProperty: true))
+          ..write(');');
+      }
+
+      buffer.write('''\n    return val;
+  }''');
+
+      final fieldKeyMap = Map.fromEntries(data.usedCtorParamsAndFields
+          .map((k) => MapEntry(k, nameAccess(accessibleFields[k])))
+          .where((me) => me.key != me.value));
+
+      String fieldKeyMapArg;
+      if (fieldKeyMap.isEmpty) {
+        fieldKeyMapArg = '';
+      } else {
+        final mapLiteral = jsonMapAsDart(fieldKeyMap);
+        fieldKeyMapArg = ', fieldKeyMap: const $mapLiteral';
+      }
+
+      buffer..write(fieldKeyMapArg)..write(')');
+    } else {
+      buffer..write(checks)..write('''
+  return ${data.content}''');
+      for (final field in data.fieldsToSet) {
+        buffer
+          ..writeln()
+          ..write('    ..$field = ')
+          ..write(deserializeFun(field));
+      }
+    }
+    buffer..writeln(';\n}')..writeln();
+
+    return CreateFactoryResult(buffer.toString(), data.usedCtorParamsAndFields);
+  }
+
+  CreateFactoryResult createUpdate(
+    Map<String, FieldElement> accessibleFields,
+    Map<String, String> unavailableReasons,
+  ) {
+    // @todo: This would be config.createUpdate
+    assert(config.createFactory);
+    final buffer = StringBuffer();
+
+    final mapType = config.anyMap ? 'Map' : 'Map<String, dynamic>';
+    buffer.write(''
+        '${prefix}UpdateFromJson${genericClassArgumentsImpl(true)}'
+        '($targetClassReference model, $mapType json');
 
     if (config.genericArgumentFactories) {
       for (var arg in element.typeParameters) {
@@ -112,7 +217,7 @@ abstract class DecodeHelper implements HelperCore {
       buffer..write(fieldKeyMapArg)..write(')');
     } else {
       buffer..write(checks)..write('''
-  return ${data.content}''');
+  model''');
       for (final field in data.fieldsToSet) {
         buffer
           ..writeln()
